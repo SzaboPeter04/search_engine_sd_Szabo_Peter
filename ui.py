@@ -25,6 +25,11 @@ class SearchEngineUI(tk.Tk):
         tk.Entry(top, textvariable=self.root_dir_var, width=60, bd=0, highlightthickness=0).pack(side="left", padx=5)
         tk.Button(top, text="Browse", command=self.browse_folder, bd=0, relief="flat").pack(side="left")
         tk.Button(top, text="Index Files", command=self.start_indexing, bd=0, relief="flat").pack(side="left", padx=5)
+        
+        ttk.Label(top, text="Ranking:").pack(side="left", padx=(10, 2))
+        self.ranking_var = tk.StringVar(value="alphabetical")
+        ranking_menu = ttk.OptionMenu(top, self.ranking_var, "alphabetical", "alphabetical", "date", "score")
+        ranking_menu.pack(side="left")
         search_frame = ttk.Frame(self, padding=(10, 0, 10, 10))
         search_frame.pack(fill="x")
         ttk.Label(search_frame, text="Search:").pack(side="left")
@@ -117,7 +122,7 @@ class SearchEngineUI(tk.Tk):
 
     def refresh_results(self):
         query = self.search_var.get().strip()
-        rows = search_documents(query)
+        rows = search_documents(query, ranking=self.ranking_var.get())
 
         for item in self.tree.get_children():
             self.tree.delete(item)
