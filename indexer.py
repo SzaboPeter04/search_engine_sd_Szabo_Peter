@@ -4,6 +4,8 @@ from datetime import datetime
 from config import SUPPORTED_EXTENSIONS
 from file_loader import load_file, build_preview
 from db import up_insert_document
+import math
+import time
 
 
 class Indexer:
@@ -13,6 +15,36 @@ class Indexer:
     def _status(self, message):
         if self.status_callback:
             self.status_callback(message)
+
+    def compute_path_score(self, path: Path, stat):
+        try:
+            now = time.time()
+            depth = len(path.parts)
+            depth_score = max(0, 10 - depth)
+
+            ext = path.suffix.lower()
+            ext_score = 0
+            if ext == ".txt":
+                ext_score = 3.0
+            elif ext == ".docx":
+                ext_score = 1.0
+
+            
+            recency_score = 0.0
+            if stat.st_mtime and now > 0:
+                recency_score = ((stat.st_mtime) / now) * 3.0
+
+            
+            size_score = 0.0
+            try:
+                size_score = min(5.0, math.log10(max(1, stat.st_size))) * 0.5
+            except Exception:
+                size_score = 0.0
+
+            score = depth_score + ext_score + recency_score + size_score
+            return float(score)
+        except Exception:
+            return 0.0
 
     def iter_supported_files(self, root_dir):
         for current_root, _, files in os.walk(root_dir, followlinks=False):
@@ -40,6 +72,7 @@ class Indexer:
                     "modified_at": modified_at,
                     "content": content,
                     "preview": build_preview(content),
+                    "path_score": self.compute_path_score(path, stat),
                 }
 
                 inserted = up_insert_document(doc)
