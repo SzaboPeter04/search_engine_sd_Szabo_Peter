@@ -14,14 +14,17 @@ def get_connection():
     )
 
 def up_insert_document(doc):
-    ensure_col_sql = "ALTER TABLE documents ADD COLUMN IF NOT EXISTS path_score double precision DEFAULT 0;"
+    ensure_col_sqls = [
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS path_score double precision DEFAULT 0;",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS dominant_color text DEFAULT NULL;",
+    ]
 
     insert_sql = """
     INSERT INTO documents (
-        path, filename, extension, size_bytes, modified_at, content, preview, path_score
+        path, filename, extension, size_bytes, modified_at, content, preview, path_score, dominant_color
     ) VALUES (
         %(path)s, %(filename)s, %(extension)s, %(size_bytes)s,
-        %(modified_at)s, %(content)s, %(preview)s, %(path_score)s
+        %(modified_at)s, %(content)s, %(preview)s, %(path_score)s, %(dominant_color)s
     )
     """
 
@@ -33,7 +36,8 @@ def up_insert_document(doc):
         modified_at = %(modified_at)s,
         content = %(content)s,
         preview = %(preview)s,
-        path_score = %(path_score)s
+        path_score = %(path_score)s,
+        dominant_color = %(dominant_color)s
     WHERE path = %(path)s
     """
 
@@ -43,11 +47,11 @@ def up_insert_document(doc):
             exists = cur.fetchone() is not None
 
             
-            try:
-                cur.execute(ensure_col_sql)
-            except Exception:
-                
-                pass
+            for ensure_sql in ensure_col_sqls:
+                try:
+                    cur.execute(ensure_sql)
+                except Exception:
+                    pass
 
             if exists:
                 cur.execute(update_sql, doc)
@@ -86,38 +90,36 @@ def search_documents(query, ranking="alphabetical"):
             
             try:
                 cur.execute(
-                    "SELECT 1 FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
-                    ("documents", "path_score"),
+                    "SELECT column_name FROM information_schema.columns WHERE table_name = %s AND column_name IN ('path_score','dominant_color')",
+                    ("documents",),
                 )
-                col_exists = cur.fetchone() is not None
+                found = {r["column_name"] for r in cur.fetchall()}
             except Exception:
-                col_exists = False
+                found = set()
+
+            has_path_score = "path_score" in found
+            has_dominant_color = "dominant_color" in found
+
             if not query or not str(query).strip():
                 order_clause = "modified_at DESC" if ranking == "date" else "filename ASC"
                 if ranking == "score":
                     order_clause = "path_score DESC"
 
-                if col_exists:
-                    cur.execute(
-                        f"""
-                        SELECT path, filename, extension, preview, modified_at, path_score
-                        FROM documents
-                        ORDER BY {order_clause}
-                        LIMIT %s
-                        """,
-                        (SEARCH_LIMIT,)
-                    )
-                else:
-                    
-                    cur.execute(
-                        f"""
-                        SELECT path, filename, extension, preview, modified_at
-                        FROM documents
-                        ORDER BY {order_clause}
-                        LIMIT %s
-                        """,
-                        (SEARCH_LIMIT,)
-                    )
+                cols = "path, filename, extension, preview, modified_at"
+                if has_path_score:
+                    cols += ", path_score"
+                if has_dominant_color:
+                    cols += ", dominant_color"
+
+                cur.execute(
+                    f"""
+                    SELECT {cols}
+                    FROM documents
+                    ORDER BY {order_clause}
+                    LIMIT %s
+                    """,
+                    (SEARCH_LIMIT,)
+                )
                 return cur.fetchall()
 
             qualifiers, free_text = _parse_query(str(query))
@@ -146,6 +148,9 @@ def search_documents(query, ranking="alphabetical"):
                     elif key == "extension":
                         sub_clauses.append("extension ILIKE %s")
                         params.append(f"%{v}%")
+                    elif key == "color":
+                        sub_clauses.append("dominant_color ILIKE %s")
+                        params.append(f"%{v}%")
                     else:
                         sub_clauses.append("(filename ILIKE %s OR content ILIKE %s OR path ILIKE %s)")
                         params.extend([f"%{v}%"] * 3)
@@ -167,22 +172,19 @@ def search_documents(query, ranking="alphabetical"):
             elif ranking == "score":
                 order_clause = "path_score DESC"
 
-            if col_exists:
-                sql = f"""
-                SELECT path, filename, extension, preview, modified_at, path_score
-                FROM documents
-                WHERE {where_sql}
-                ORDER BY {order_clause}
-                LIMIT %s
-                """
-            else:
-                sql = f"""
-                SELECT path, filename, extension, preview, modified_at
-                FROM documents
-                WHERE {where_sql}
-                ORDER BY {order_clause}
-                LIMIT %s
-                """
+            cols = "path, filename, extension, preview, modified_at"
+            if has_path_score:
+                cols += ", path_score"
+            if has_dominant_color:
+                cols += ", dominant_color"
+
+            sql = f"""
+            SELECT {cols}
+            FROM documents
+            WHERE {where_sql}
+            ORDER BY {order_clause}
+            LIMIT %s
+            """
 
             params.append(SEARCH_LIMIT)
             cur.execute(sql, tuple(params))
