@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 from config import SUPPORTED_EXTENSIONS
-from file_loader import load_file, build_preview
+from processors import get_processor_for_path
 from db import up_insert_document
 import math
 import time
@@ -31,8 +31,13 @@ class Indexer:
 
             
             recency_score = 0.0
-            if stat.st_mtime and now > 0:
-                recency_score = ((stat.st_mtime) / now) * 3.0
+            try:
+                if stat.st_mtime is not None:
+                    age = max(0.0, now - stat.st_mtime)
+                    recency_window = 30 * 24 * 60 * 60
+                    recency_score = max(0.0, 1.0 - (age / recency_window)) * 3.0
+            except Exception:
+                recency_score = 0.0
 
             
             size_score = 0.0
@@ -62,7 +67,8 @@ class Indexer:
         for path in self.iter_supported_files(root_dir):
                 total += 1
                 stat = path.stat()
-                content = load_file(path)
+                processor = get_processor_for_path(path)
+                processed = processor.process(path)
                 modified_at = datetime.utcfromtimestamp(stat.st_mtime).isoformat()
                 doc = {
                     "path": str(path.resolve()),
@@ -70,8 +76,9 @@ class Indexer:
                     "extension": path.suffix.lower(),
                     "size_bytes": stat.st_size,
                     "modified_at": modified_at,
-                    "content": content,
-                    "preview": build_preview(content),
+                    "content": processed.get("content", ""),
+                    "preview": processed.get("preview", ""),
+                    "dominant_color": processed.get("dominant_color"),
                     "path_score": self.compute_path_score(path, stat),
                 }
 
