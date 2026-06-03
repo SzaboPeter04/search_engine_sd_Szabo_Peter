@@ -2,8 +2,9 @@ import os
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from db import search_documents, get_document_content
+from db import search_documents, get_document_content, increment_path_score
 from indexer import Indexer
+from widgets import WidgetFactory
 
 
 class SearchEngineUI(tk.Tk):
@@ -15,6 +16,9 @@ class SearchEngineUI(tk.Tk):
         self.result_paths = {}
         self.root_dir_var = tk.StringVar(value=os.getcwd())
         self.search_var = tk.StringVar()
+        self.active_widgets = set()
+        self._widget_images = {}
+        self._content_cache = {}
         self._build_widgets()
         self.refresh_results()
 
@@ -25,6 +29,8 @@ class SearchEngineUI(tk.Tk):
         tk.Entry(top, textvariable=self.root_dir_var, width=60, bd=0, highlightthickness=0).pack(side="left", padx=5)
         tk.Button(top, text="Browse", command=self.browse_folder, bd=0, relief="flat").pack(side="left")
         tk.Button(top, text="Index Files", command=self.start_indexing, bd=0, relief="flat").pack(side="left", padx=5)
+        self.widget_frame = ttk.Frame(top)
+        self.widget_frame.pack(side="left", padx=(10, 0))
         
         ttk.Label(top, text="Ranking:").pack(side="left", padx=(10, 2))
         self.ranking_var = tk.StringVar(value="alphabetical")
@@ -42,18 +48,28 @@ class SearchEngineUI(tk.Tk):
         preview_frame = ttk.Frame(main)
         main.add(results_frame, weight=3)
         main.add(preview_frame, weight=2)
+        style = ttk.Style()
+        style.configure("Treeview", rowheight=80)
+
         self.tree = ttk.Treeview(
             results_frame,
             columns=("filename", "extension", "path"),
-            show="headings",
+            show=("tree", "headings"),
             height=15
         )
+
+        self.tree.heading("#0", text="Preview")
         self.tree.heading("filename", text="Filename")
         self.tree.heading("extension", text="Type")
         self.tree.heading("path", text="Path")
+
+        self.tree.column("#0", width=100, stretch=False)
+        self.tree.column("filename", width=260)
+        self.tree.column("extension", width=80)
+        self.tree.column("path", width=520)
         self.tree.column("filename", width=220)
         self.tree.column("extension", width=80)
-        self.tree.column("path", width=600)
+        self.tree.column("path", width=520)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self.on_result_selected)
         self.preview_text = tk.Text(preview_frame, wrap="word", bd=0, highlightthickness=0)
@@ -128,19 +144,43 @@ class SearchEngineUI(tk.Tk):
             self.tree.delete(item)
 
         self.result_paths.clear()
-
+        self._widget_images.clear()
         for i, row in enumerate(rows):
             iid = str(i)
             self.result_paths[iid] = row["path"]
-            self.tree.insert(
-                "",
-                "end",
-                iid=iid,
-                values=(row["filename"], row["extension"], row["path"])
-            )
+
+            try:
+                disp = WidgetFactory.get_row_display(self, row, iid)
+            except Exception as e:
+                print("Widget display error:", e)
+                disp = {"image": None, "text": ""}
+
+            vals = (row["filename"], row["extension"], row["path"])
+
+            insert_args = {
+                "iid": iid,
+                "text": disp.get("text", ""),
+                "values": vals,
+            }
+
+            if disp.get("image") is not None:
+                insert_args["image"] = disp.get("image")
+
+            self.tree.insert("", "end", **insert_args)
 
         self.preview_text.delete("1.0", tk.END)
         self.status_var.set(f"{len(rows)} result(s).")
+
+        try:
+            widgets = WidgetFactory.get_buttons(self, rows)
+            for child in self.widget_frame.winfo_children():
+                child.destroy()
+            for w in widgets:
+                lab = w.label + (" [on]" if w.__class__.__name__ in getattr(self, "active_widgets", set()) else "")
+                btn = tk.Button(self.widget_frame, text=lab, bd=0, relief="flat", command=w.action)
+                btn.pack(side="left", padx=4)
+        except Exception:
+            pass
 
     def on_result_selected(self, _event=None):
         selected = self.tree.selection()
@@ -161,3 +201,39 @@ class SearchEngineUI(tk.Tk):
             f"Preview:\n"
             f"{content[:3000]}"
         )
+
+        def _inc_and_refresh():
+            try:
+                increment_path_score(path)
+            except Exception:
+                pass
+            try:
+                self.after(0, self.refresh_results)
+            except Exception:
+                pass
+
+        threading.Thread(target=_inc_and_refresh, daemon=True).start()
+
+    def _toggle_widget(self, name: str):
+        if name in self.active_widgets:
+            self.active_widgets.remove(name)
+        else:
+            self.active_widgets.add(name)
+
+    def _get_cached_content(self, row):
+        path = row.get("path")
+        if not path:
+            return ""
+        if path in self._content_cache:
+            return self._content_cache[path]
+        try:
+            content = get_document_content(path)
+        except Exception:
+            content = ""
+        try:
+            if len(self._content_cache) > 200:
+                self._content_cache.clear()
+        except Exception:
+            pass
+        self._content_cache[path] = content
+        return content
