@@ -21,6 +21,8 @@ def load_file(path: Path):
     ext = path.suffix.lower()
     if ext == ".txt":
         return read_txt(path)
+    if ext == ".log":
+        return read_txt(path)
     if ext == ".docx":
         return read_docx(path)
     raise ValueError(f"Unsupported file type: {ext}")
